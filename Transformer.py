@@ -60,5 +60,73 @@ class PositionEncoding(nn.Module):
         # 将pe增加一个batch维度，方便后续直接相加
         pe = pe.unsqueeze(0) # shape: [1, max_len, d_model]
 
-        # 将pe注册为buffer。buffer是模型的一部分，但不是参数，不会被梯度更新。
+        # 将pe注册为buffer，buffer是模型的一部分，但不是参数，不会被梯度更新。
         self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
+
+
+# 实现缩放点积注意力机制
+
+def scaled_dot_product_attention(q, k, v, mask=None):
+    """
+    核心的注意力计算函数
+    q, k, v: shape [batch_size, n_heads, seq_len, d_k]
+    mask: shape [batch_size, 1, 1, seq_len] (对于encoder的padding mask) or [batch_size, 1, seq_len, seq_len] (对于decoder的subsequent mask)
+    """
+
+    d_k = q.size(-1)
+
+    # 计算分数
+    scores = torch.matmul(q, k.tranpose(-2, -1))
+    # 缩放
+    scores = scores / math.sqrt(d_k)
+
+    # mask
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, -1e9)
+
+    p_attn = torch.softmax(scores, dim=-1)
+
+    return torch.matmul(p_attn, v), p_attn
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, n_heads, dropout=0.1):
+        super(MultiHeadAttention, self).__init__()
+        assert d_model % n_heads == 0
+
+        self.d_k = d_model // n_heads
+        self.n_heads = n_heads
+
+        self.linears = nn.ModuleList(nn.Linear(d_model, d_model) for _ in range(4))
+        self.attn = None
+        self.dropout = nn.Dropout(p=dropout)
+
+
+    def forward(self, query, key, value, mask=None):
+
+        if mask is not None:
+            # 同样的mask需要应用在所有head上
+            mask = mask.unsqueeze(1) # shape: [batch_size, 1, 1, seq_len] or [batch_size, 1, seq_len, seq_len]
+
+        batch_size = query.size(0)
+
+        query, key, value = [l(x).view(batch_size, -1, self.n_heads, self.d_k).transpose(1, 2) 
+                             for l, x in zip(self.linears, (query, key, value))]
+
+        # q,k,v shape: [batch_size, n_heads, seq_len, d_k]
+
+        x, self.attn = scaled_dot_product_attention(query, key, value, mask)
+
+        x = x.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
+        # x shape: [batch_size, seq_len, d_model]
+        
+        # 融合信息
+        return self.linears[-1](x)
+    
+# d_model = 512
+# n_heads = 8
+# mah = MultiHeadAttention(d_model, n_heads)
