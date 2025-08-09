@@ -126,7 +126,19 @@ class MultiHeadAttention(nn.Module):
         
         # 融合信息
         return self.linears[-1](x)
-    
-# d_model = 512
-# n_heads = 8
-# mah = MultiHeadAttention(d_model, n_heads)
+
+
+# 前馈层
+class PositionwiseFeedForward(nn.Module):
+    def __init__(self, d_model, d_ff, dropout=0.1) -> None:
+        super().__init__()
+        self.w_1 = nn.Linear(d_model, d_ff)
+        self.w_2 = nn.Linear(d_ff, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        return self.w_2(self.dropout(self.relu(self.w_1(x))))
+
+
+# 残差连接与层归一化，用于解决深度网络训练不稳定
